@@ -1,8 +1,15 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:convert' as convert;
+
 import 'package:ease_call_kit_demo/ease_call_kit/ease_call_manager.dart';
 import 'package:ease_call_kit_demo/ease_call_kit/ease_call_page.dart';
 import 'package:ease_call_kit_demo/ease_call_kit/models/ease_call_error.dart';
 import 'package:flutter/material.dart';
 import 'package:im_flutter_sdk/im_flutter_sdk.dart';
+
+String defineAppKey = "1110200629107815#flutter";
+String defineAgoraId = "15cb0d28b87b425ea613fc46f7c9f974";
 
 void main() {
   runApp(const MyApp());
@@ -54,7 +61,7 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   void _incrementCounter() async {
     try {
-      await EaseCallManager.instance.startSingleCall("du003");
+      await EaseCallManager.instance.startSingleCall("du002");
     } on EaseCallError catch (e) {
       debugPrint("code: ${e.errCode}, desc: ${e.errDesc}");
     }
@@ -63,11 +70,16 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     _initSDK();
+    EaseCallManager.instance.setHandle(EaseCallEventHandle(
+      callDidRequestTokenForAppId: (appId, channelName, eid, agoraUId) => {
+        fetchRTCToken(channelName, EMClient.getInstance.currentUsername!),
+      },
+    ));
     super.initState();
   }
 
   void _initSDK() async {
-    var options = EMOptions(appKey: "easemob-demo#easeim");
+    var options = EMOptions(appKey: defineAppKey);
     options.debugModel = true;
     options.autoLogin = false;
 
@@ -90,7 +102,7 @@ class _MyHomePageState extends State<MyHomePage> {
       ),
       body: Center(
         child: EaseCallPage(
-          appId: "",
+          appId: defineAgoraId,
           child: const Center(
             child: Text("Text"),
           ),
@@ -102,5 +114,38 @@ class _MyHomePageState extends State<MyHomePage> {
         child: const Icon(Icons.add),
       ),
     );
+  }
+
+  Future<String?> fetchRTCToken(String channelName, String username) async {
+    String? token = EMClient.getInstance.accessToken;
+    if (token == null) return null;
+    var httpClient = HttpClient();
+    var uri = Uri.http("a1.easemob.com", "/token/rtcToken/v1", {
+      "userAccount": username,
+      "channelName": channelName,
+      "appkey": defineAppKey,
+    });
+    var request = await httpClient.getUrl(uri);
+    request.headers.add("Authorization", "Bearer $token");
+    HttpClientResponse response = await request.close();
+    httpClient.close();
+    if (response.statusCode == HttpStatus.ok) {
+      var _content = await response.transform(const Utf8Decoder()).join();
+      debugPrint(_content);
+      Map<String, dynamic>? map = convert.jsonDecode(_content);
+      if (map != null) {
+        if (map["code"] == "RES_0K") {
+          debugPrint("获取数据成功: $map");
+          String rtcToken = map["accessToken"];
+          int agoraUserId = map["agoraUserId"];
+
+          EaseCallManager.instance.setRtcToken(
+            rtcToken,
+            channelName,
+            agoraUserId,
+          );
+        }
+      }
+    }
   }
 }

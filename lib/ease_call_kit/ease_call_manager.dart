@@ -1,12 +1,14 @@
 import 'dart:async';
 
 import 'package:ease_call_kit_demo/ease_call_kit/ease_call_keys.dart';
-import 'package:ease_call_kit_demo/ease_call_kit/models/ease_call_eccall.dart';
+import 'package:ease_call_kit_demo/ease_call_kit/models/ease_call_ec_call.dart';
 import 'package:ease_call_kit_demo/ease_call_kit/models/ease_call_error.dart';
 import 'package:ease_call_kit_demo/ease_call_kit/models/ease_call_model.dart';
+import 'package:ease_call_kit_demo/ease_call_kit/models/ease_call_view_model.dart';
 import 'package:ease_call_kit_demo/ease_call_kit/models/ease_enums.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:agora_rtc_engine/rtc_engine.dart';
+
 import 'package:flutter/widgets.dart';
 
 import 'package:im_flutter_sdk/im_flutter_sdk.dart';
@@ -26,18 +28,24 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
   bool _needSwitchToVoice = false;
   late RtcEngine _engine;
   bool get isBusy {
-    return model.currCall != null && model.state != EaseCallState.idle
+    return model.curCall != null && model.state != EaseCallState.idle
         ? true
         : false;
   }
 
   late EaseCallModel model;
 
+  EaseCallViewModel? viewModel;
+
   EaseCallEventHandle? callEventHandle;
 
   EaseCallManager() {
     model = EaseCallModel(stateChangeHandle: _callStateWillChange);
     EMClient.getInstance.chatManager.addListener(this);
+  }
+
+  void setHandle(EaseCallEventHandle callEventHandle) {
+    this.callEventHandle = callEventHandle;
   }
 
   void setAppId(String appId) async {
@@ -48,21 +56,101 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
   Future<void> initAgoraSDK() async {
     await [Permission.microphone, Permission.camera].request();
     _engine = await RtcEngine.create(appId!);
+    _engine.setEventHandler(RtcEngineEventHandler(
+      error: (err) => {
+        if (err == ErrorCode.TokenExpired || err == ErrorCode.InvalidToken)
+          {
+            model.state = EaseCallState.idle,
+            _callbackError(
+              EaseCallErrorType.rtc,
+              int.parse(err.toString()),
+              "RTC Error",
+            ),
+          }
+        else
+          {
+            if (err != ErrorCode.NoError &&
+                err != ErrorCode.JoinChannelRejected)
+              {
+                _callbackError(
+                  EaseCallErrorType.rtc,
+                  int.parse(err.toString()),
+                  "RTC Error",
+                ),
+              }
+          },
+      },
+      remoteAudioStateChanged: (uid, state, reason, elapsed) => {},
+      joinChannelSuccess: (channel, uid, elapsed) {
+        callEventHandle?.didJoinChannel?.call(channel, uid);
+        model.hasJoinedChannel = true;
+        model.curCall!.users[uid] = EMClient.getInstance.currentUsername!;
+        if (model.curCall!.callType == EaseCallType.multi) {
+          enableVoice(false);
+        }
+      },
+      localUserRegistered: (uid, userAccount) => {},
+      tokenPrivilegeWillExpire: (token) => {},
+      userOffline: (uid, reason) => {
+        if (model.curCall?.callType == EaseCallType.multi)
+          {
+            // TODO: update multi view, remove offline user.
+          }
+        else
+          {
+            _callbackCallEnd(EaseCallEndReason.hangup),
+            model.state = EaseCallState.idle,
+          },
+      },
+      userJoined: (uid, elapsed) {
+        if (model.curCall?.callType == EaseCallType.multi) {
+          // TODO: update multi view, add joind user.
+        } else {
+          _stopCallTimer(model.curCall!.remoteEid!);
+          model.curCall!.users[uid] = model.curCall!.remoteEid!;
+        }
+        String? username = model.curCall!.users[uid];
+        callEventHandle?.remoteUserDidJoinChannel?.call(
+          model.curCall!.channelName!,
+          uid,
+          username!,
+        );
+      },
+      userMuteVideo: (uid, muted) => {},
+      userMuteAudio: (uid, muted) => {},
+      remoteVideoStateChanged: (uid, state, reason, elapsed) => {
+        if (reason == VideoRemoteStateReason.RemoteMuted &&
+            model.curCall!.callType == EaseCallType.video)
+          {
+            // switchVideoToVoice(),
+          }
+      },
+      audioVolumeIndication: (speakers, totalVolume) => {},
+    ));
   }
 
   @override
   void dispose() {
+    _clearInfo();
+    _instance = null;
+    super.dispose();
+  }
+
+  void _clearInfo() {
     for (var item in _alertTimerMap.values.toList()) {
       item.cancel();
     }
     for (var item in _callTimerMap.values.toList()) {
       item.cancel();
     }
+    viewModel = null;
+    _stopCallTimeRunner();
     _alertTimerMap.clear();
     _callTimerMap.clear();
     _confirmTimer?.cancel();
-    _instance = null;
-    super.dispose();
+    model.recvCalls.clear();
+    model.curCall = null;
+    _needSwitchToVoice = false;
   }
 
   /// 发送呼叫邀请
@@ -79,7 +167,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
       EaseCallKeys.action: EaseCallKeys.inviteAction,
       EaseCallKeys.callId: callId,
       EaseCallKeys.callType: callType == EaseCallType.audio ? 0 : 1,
-      EaseCallKeys.callerDevId: model.currDevId,
+      EaseCallKeys.callerDevId: model.curDevId,
       EaseCallKeys.channelName: channelName,
       EaseCallKeys.timestamp: currentTime,
     };
@@ -107,7 +195,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
       EaseCallKeys.msgType: EaseCallKeys.msgTypeValue,
       EaseCallKeys.action: EaseCallKeys.alertAction,
       EaseCallKeys.callId: callId,
-      EaseCallKeys.calleeDevId: model.currDevId,
+      EaseCallKeys.calleeDevId: model.curDevId,
       EaseCallKeys.callerDevId: calleeDevId,
       EaseCallKeys.timestamp: currentTime,
     };
@@ -119,7 +207,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
     }
   }
 
-  void _sendComfirmRingMsgToCallee(
+  void _sendConfirmRingMsgToCallee(
     String eid,
     String callId,
     bool isValid,
@@ -135,7 +223,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
       EaseCallKeys.msgType: EaseCallKeys.msgTypeValue,
       EaseCallKeys.action: EaseCallKeys.confirmRingAction,
       EaseCallKeys.callId: callId,
-      EaseCallKeys.callerDevId: model.currDevId,
+      EaseCallKeys.callerDevId: model.curDevId,
       EaseCallKeys.calleeDevId: calleeDevId,
       EaseCallKeys.timestamp: currentTime,
       EaseCallKeys.callStatus: isValid,
@@ -158,9 +246,9 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
 
     msg.attributes = {
       EaseCallKeys.msgType: EaseCallKeys.msgTypeValue,
-      EaseCallKeys.action: EaseCallKeys.cancalCallAction,
+      EaseCallKeys.action: EaseCallKeys.cancelCallAction,
       EaseCallKeys.callId: callId,
-      EaseCallKeys.callerDevId: model.currDevId,
+      EaseCallKeys.callerDevId: model.curDevId,
       EaseCallKeys.timestamp: currentTime,
     };
 
@@ -189,12 +277,12 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
       EaseCallKeys.action: EaseCallKeys.answerCallAction,
       EaseCallKeys.callId: callId,
       EaseCallKeys.callerDevId: devId,
-      EaseCallKeys.calleeDevId: model.currDevId,
+      EaseCallKeys.calleeDevId: model.curDevId,
       EaseCallKeys.result: result,
       EaseCallKeys.timestamp: currentTime,
     };
 
-    if (model.currCall!.callType == EaseCallType.audio && _needSwitchToVoice) {
+    if (model.curCall!.callType == EaseCallType.audio && _needSwitchToVoice) {
       map[EaseCallKeys.videoToVoice] = true;
     }
     msg.attributes = map;
@@ -224,13 +312,13 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
       EaseCallKeys.msgType: EaseCallKeys.msgTypeValue,
       EaseCallKeys.action: EaseCallKeys.confirmCalleeAction,
       EaseCallKeys.callId: callId,
-      EaseCallKeys.callerDevId: model.currDevId,
+      EaseCallKeys.callerDevId: model.curDevId,
       EaseCallKeys.calleeDevId: devId,
       EaseCallKeys.result: result,
       EaseCallKeys.timestamp: currentTime,
     };
 
-    if (result == EaseCallKeys.result) {
+    if (result == EaseCallKeys.accept) {
       model.state = EaseCallState.answering;
     }
     try {
@@ -288,7 +376,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
     String? ext = msg.attributes[EaseCallKeys.ext];
 
     _parseInviteMsg() {
-      if (callId != null && model.currCall?.callId == callId) {
+      if (callId != null && model.curCall?.callId == callId) {
         return;
       }
       if (_alertTimerMap.containsKey(callId)) return;
@@ -316,24 +404,24 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
     }
 
     _parseAlertMsg() {
-      if (model.currDevId == callerDevId &&
+      if (model.curDevId == callerDevId &&
           callerDevId != null &&
           callId != null &&
           calleeDevId != null) {
-        if (model.currCall?.callId == callId &&
+        if (model.curCall?.callId == callId &&
             _callTimerMap.containsKey(from)) {
-          _sendComfirmRingMsgToCallee(from, callId, true, calleeDevId);
+          _sendConfirmRingMsgToCallee(from, callId, true, calleeDevId);
         } else {
-          _sendComfirmRingMsgToCallee(from, callId, false, calleeDevId);
+          _sendConfirmRingMsgToCallee(from, callId, false, calleeDevId);
         }
       }
     }
 
     _parseCancelCallMsg() {
       if (callId != null &&
-          model.currCall?.callId == callId &&
+          model.curCall?.callId == callId &&
           !model.hasJoinedChannel) {
-        _stopConfimTimer(callId);
+        _stopConfirmTimer(callId);
         _stopAlertTimer(callId);
         _callbackCallEnd(EaseCallEndReason.remoteCancel);
         model.state = EaseCallState.idle;
@@ -346,11 +434,11 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
     _parseAnswerMsg() {
       if (callId != null &&
           callerDevId != null &&
-          model.currCall?.callId == callId &&
-          model.currDevId == callerDevId) {
-        if (model.currCall?.callType == EaseCallType.multi) {
+          model.curCall?.callId == callId &&
+          model.curDevId == callerDevId) {
+        if (model.curCall?.callType == EaseCallType.multi) {
           if (result != EaseCallKeys.accept) {
-            // TODO: update muti ui;
+            // TODO: update multi ui;
           }
 
           Timer? timer = _callTimerMap[from];
@@ -361,22 +449,22 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
           }
         } else {
           if (model.state == EaseCallState.outgoing) {
-            if (result != EaseCallKeys.accept) {
+            if (result == EaseCallKeys.accept) {
               if (isVideoToVoice ?? false) {
                 switchVideoToVoice();
               }
               model.state = EaseCallState.answering;
+            } else {
+              if (result == EaseCallKeys.refuseResult) {
+                _callbackCallEnd(EaseCallEndReason.refuse);
+              }
+              if (result == EaseCallKeys.busyResult) {
+                _callbackCallEnd(EaseCallEndReason.busy);
+              }
+              model.state = EaseCallState.idle;
             }
-          } else {
-            if (result == EaseCallKeys.refuseReslut) {
-              _callbackCallEnd(EaseCallEndReason.refuse);
-            }
-            if (result == EaseCallKeys.busyResult) {
-              _callbackCallEnd(EaseCallEndReason.busy);
-            }
-            model.state = EaseCallState.idle;
+            _sendConfirmAnswerMsgToCallee(from, callId, result!, calleeDevId!);
           }
-          _sendConfirmAnswerMsgToCallee(from, callId, result!, calleeDevId!);
         }
       }
     }
@@ -385,7 +473,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
       if (callId != null &&
           calleeDevId != null &&
           _alertTimerMap.containsKey(callId) &&
-          calleeDevId == model.currDevId) {
+          calleeDevId == model.curDevId) {
         _stopAlertTimer(callId);
         if (isBusy) {
           _sendAnswerMsg(from, callId, EaseCallKeys.busyResult, callerDevId!);
@@ -394,7 +482,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
         ECCall? call = model.recvCalls[callId];
         if (call != null) {
           if (isValid ?? false) {
-            model.currCall = call;
+            model.curCall = call;
             model.recvCalls.clear();
             _stopAllAlertTimer();
             model.state = EaseCallState.alerting;
@@ -407,25 +495,18 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
     _parseConfirmCalleeMsg() {
       if (callId == null) return;
       if (model.state == EaseCallState.alerting &&
-          model.currCall?.callId == callId) {
-        _stopConfimTimer(callId);
-        if (model.currDevId == calleeDevId) {
+          model.curCall?.callId == callId) {
+        _stopConfirmTimer(callId);
+        if (model.curDevId == calleeDevId) {
           if (result == EaseCallKeys.accept) {
             model.state = EaseCallState.answering;
-            _startCallTimeRunner();
-            notifyListeners();
-            if (model.currCall!.callType != EaseCallType.audio) {
+            if (model.curCall!.callType != EaseCallType.audio) {
               // TODO: setupLocalVideo
             }
-            callEventHandle?.callDidRequestTokenForAppId?.call(
-              appId!,
-              model.currCall!.channelName!,
-              EMClient.getInstance.currentUsername!,
-              model.currCall!.uid,
-            );
+            _needFetchToken();
           }
         } else {
-          _callbackCallEnd(EaseCallEndReason.handleOnOtherDeivce);
+          _callbackCallEnd(EaseCallEndReason.handleOnOtherDevice);
           model.state = EaseCallState.idle;
         }
       } else {
@@ -437,7 +518,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
     }
 
     _parseVideoToVoiceMsg() {
-      if (model.currCall?.callId == callId) {
+      if (model.curCall?.callId == callId) {
         switchVideoToVoice();
       }
     }
@@ -454,7 +535,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
         case EaseCallKeys.confirmRingAction:
           _parseConfirmRingMsg();
           break;
-        case EaseCallKeys.cancalCallAction:
+        case EaseCallKeys.cancelCallAction:
           _parseCancelCallMsg();
           break;
         case EaseCallKeys.confirmCalleeAction:
@@ -473,31 +554,58 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
   void _callStateWillChange(EaseCallState newState, EaseCallState perState) {
     switch (newState) {
       case EaseCallState.idle:
+        debugPrint("------切换为挂断状态");
         _refreshIdle();
         break;
       case EaseCallState.outgoing:
+        debugPrint("------切换为呼叫状态");
         _refreshOutgoing();
         break;
       case EaseCallState.alerting:
+        debugPrint("------切换为协商状态");
         _refreshAlerting();
+
         break;
       case EaseCallState.answering:
+        debugPrint("------切换为接听状态");
         _refreshAnswering();
         break;
       default:
     }
   }
 
+  void _needFetchToken() {
+    callEventHandle?.callDidRequestTokenForAppId?.call(
+      appId!,
+      model.curCall!.channelName!,
+      EMClient.getInstance.currentUsername!,
+      model.curCall!.uid,
+    );
+  }
+
   /// pragma mark - Timer manager
 
-  void _joinAgoraChannel() async {}
+  void _joinAgoraChannel() async {
+    if (model.hasJoinedChannel) {
+      await _engine.leaveChannel();
+    }
+
+    await _engine.joinChannel(
+      model.agoraRtcToken,
+      model.curCall!.channelName!,
+      null,
+      model.agoraUid!,
+    );
+
+    setSpeakerOut(true);
+  }
 
   void _startCallTimer(String remoteUser) {
     if (_callTimerMap.containsKey(remoteUser)) {
       return;
     }
     Timer timer = Timer(const Duration(seconds: 30), () {
-      _timeoutcall(remoteUser);
+      _timeoutCall(remoteUser);
     });
     _callTimerMap[remoteUser] = timer;
   }
@@ -508,10 +616,10 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
     _callTimerMap.remove(remoteUser);
   }
 
-  void _timeoutcall(String remoteUser) {
+  void _timeoutCall(String remoteUser) {
     _callTimerMap.remove(remoteUser);
-    _sendCancelCallMsgToCallee(remoteUser, model.currCall!.callId!);
-    if (model.currCall!.callType != EaseCallType.multi) {
+    _sendCancelCallMsgToCallee(remoteUser, model.curCall!.callId!);
+    if (model.curCall!.callType != EaseCallType.multi) {
       _callbackCallEnd(EaseCallEndReason.remoteNoResponse);
       model.state = EaseCallState.idle;
     } else {
@@ -548,19 +656,19 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
       _confirmTimer!.cancel();
     }
     _confirmTimer = Timer(const Duration(seconds: 5), () {
-      _timeroutConfirm(callId);
+      _timeoutConfirm(callId);
     });
   }
 
-  void _stopConfimTimer(String callId) {
+  void _stopConfirmTimer(String callId) {
     if (_confirmTimer != null) {
       _confirmTimer!.cancel();
     }
     _confirmTimer = null;
   }
 
-  void _timeroutConfirm(String callId) {
-    if (model.currCall?.callId == callId) {
+  void _timeoutConfirm(String callId) {
+    if (model.curCall?.callId == callId) {
       _callbackCallEnd(EaseCallEndReason.remoteNoResponse);
       model.state = EaseCallState.idle;
     }
@@ -584,50 +692,99 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
   }
 
   void _timeoutRing(String callId) {
-    if (model.currCall?.callId == callId) {
+    if (model.curCall?.callId == callId) {
       _callbackCallEnd(EaseCallEndReason.noResponse);
     }
   }
 
   void _callbackCallEnd(EaseCallEndReason reason) {
     callEventHandle?.callDidEnd?.call(
-      model.currCall?.channelName,
+      model.curCall?.channelName,
       reason,
       0,
-      model.currCall?.callType,
+      model.curCall?.callType,
     );
+  }
+
+  void _callbackError(EaseCallErrorType type, int code, String desc) {
+    callEventHandle?.callDidOccurError?.call(EaseCallError(code, type, desc));
   }
 
   /// 开始计时
   void _startCallTimeRunner() {
+    _stopCallTimeRunner();
     _callTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      model.time += 1;
-      _refreshCallTime();
+      viewModel?.time += 1;
     });
   }
 
   void _stopCallTimeRunner() {
     _callTimer?.cancel();
+    viewModel?.time = 0;
   }
 
   /// pragma mark - update ui.
   void _refreshOutgoing() {
-    _updateUI();
+    if (model.curCall != null) {
+      if (model.curCall!.callType == EaseCallType.video) {
+        // TODO: update local video view;
+      }
+      viewModel = EaseCallViewModel(
+        model.curCall!.callType!,
+        EaseCallState.outgoing,
+        false,
+      );
+
+      _updateUI();
+      _needFetchToken();
+    } else {
+      // TODO: clear info;
+    }
   }
 
   void _refreshAlerting() {
-    _updateUI();
+    if (model.curCall != null) {
+      callEventHandle?.callDidReceive?.call(
+        model.curCall!.callType!,
+        model.curCall!.remoteEid!,
+        model.curCall!.ext,
+      );
+      if (model.curCall!.callType == EaseCallType.multi) {
+        // TODO: set ui type;
+      } else {}
+      _startRingTimer(model.curCall!.callId!);
+      viewModel =
+          EaseCallViewModel(model.curCall!.callType!, model.state, true);
+      _updateUI();
+    }
   }
 
   void _refreshAnswering() {
-    _updateUI();
+    if (model.curCall != null) {
+      if (model.curCall!.callType == EaseCallType.multi &&
+          model.curCall!.isCaller) {
+        // TODO: update local video view;
+        _needFetchToken();
+      }
+      _startCallTimeRunner();
+      viewModel = viewModel?.copyWith(state: model.state);
+      _updateUI();
+    }
   }
 
-  void _refreshIdle() {
-    _updateUI();
-  }
+  void _refreshIdle() async {
+    if (model.curCall != null) {
+      if (model.curCall!.callType != EaseCallType.audio) {
+        await _engine.stopPreview();
+        await _engine.disableVideo();
+      }
+      if (model.hasJoinedChannel) {
+        model.hasJoinedChannel = false;
+        await _engine.leaveChannel();
+      }
+    }
 
-  void _refreshCallTime() {
+    _clearInfo();
     _updateUI();
   }
 
@@ -770,13 +927,13 @@ extension EaseCallManagerMethod on EaseCallManager {
 
     if (isBusy) {
       throw (EaseCallError(
-        EaseCallProcessErrorCode.currBusy,
+        EaseCallProcessErrorCode.curBusy,
         EaseCallErrorType.process,
         "current is busy.",
       ));
     }
 
-    model.currCall = ECCall(
+    model.curCall = ECCall(
       channelName: randomString(),
       remoteEid: eid,
       callType: callType,
@@ -789,12 +946,13 @@ extension EaseCallManagerMethod on EaseCallManager {
       await _sendInviteMsgToCallee(
         eid,
         callType,
-        model.currCall!.callId!,
-        model.currCall!.channelName!,
+        model.curCall!.callId!,
+        model.curCall!.channelName!,
         ext,
       );
       _startCallTimer(eid);
     } on EaseCallError {
+      viewModel = null;
       _updateUI();
       model.state = EaseCallState.idle;
       rethrow;
@@ -805,7 +963,7 @@ extension EaseCallManagerMethod on EaseCallManager {
   Future<void> hangupAction() async {
     if (model.state == EaseCallState.answering) {
       // 正常挂断
-      if (model.currCall?.callType == EaseCallType.multi) {
+      if (model.curCall?.callType == EaseCallType.multi) {
         if (_callTimerMap.isNotEmpty) {
           List<Timer> timers = _callTimerMap.values.toList();
           for (var timer in timers) {
@@ -818,20 +976,20 @@ extension EaseCallManagerMethod on EaseCallManager {
     } else {
       if (model.state == EaseCallState.outgoing) {
         // 取消呼叫
-        _stopAlertTimer(model.currCall!.remoteEid!);
+        _stopAlertTimer(model.curCall!.remoteEid!);
         _sendCancelCallMsgToCallee(
-          model.currCall!.remoteEid!,
-          model.currCall!.callId!,
+          model.curCall!.remoteEid!,
+          model.curCall!.callId!,
         );
         _callbackCallEnd(EaseCallEndReason.cancel);
         model.state = EaseCallState.idle;
       } else {
         // 拒接
         _sendAnswerMsg(
-          model.currCall!.remoteEid!,
-          model.currCall!.callId!,
-          EaseCallKeys.refuseReslut,
-          model.currCall!.remoteDevId!,
+          model.curCall!.remoteEid!,
+          model.curCall!.callId!,
+          EaseCallKeys.refuseResult,
+          model.curCall!.remoteDevId!,
         );
         model.state = EaseCallState.idle;
       }
@@ -847,7 +1005,7 @@ extension EaseCallManagerMethod on EaseCallManager {
     String channelName,
     int agoraUid,
   ) {
-    if (model.currCall?.channelName == channelName) {
+    if (model.curCall?.channelName == channelName) {
       model.agoraRtcToken = token;
       model.agoraUid = agoraUid;
       _joinAgoraChannel();
@@ -856,41 +1014,78 @@ extension EaseCallManagerMethod on EaseCallManager {
 
   /// 切换小窗口
   /// [isMin] 是否使用小窗口
-  void setWindowToMin(bool isMin) {
-    model = model.copyWith(isMin: isMin);
+  void setWindowToMin(bool isMin) async {
+    viewModel = viewModel?.copyWith(isMin: isMin);
     _updateUI();
   }
 
   /// 设置麦克风静音
   /// [isMute] 是否静音
-  void setMute(bool isMute) {
-    model = model.copyWith(isMute: isMute);
+  void setMute(bool isMute) async {
+    if (isMute) {
+      await _engine.disableAudio();
+    } else {
+      await _engine.enableAudio();
+    }
+
+    viewModel = viewModel?.copyWith(isMute: isMute);
+
     _updateUI();
   }
 
   /// 使用扬声器
   /// [isSpeaker] 是否使用扬声器
-  void setSpeakerOut(bool isSpeaker) {
-    model = model.copyWith(isSpeaker: isSpeaker);
+  void setSpeakerOut(bool isSpeaker) async {
+    await _engine.setEnableSpeakerphone(isSpeaker);
+    viewModel = viewModel?.copyWith(isSpeaker: isSpeaker);
     _updateUI();
   }
 
   /// 由视频切换为语音，切换后本次通话不可再切换回来
-  void switchVideoToVoice() {
-    if (model.currCall != null &&
-        model.currCall!.callType == EaseCallType.video) {
+  void switchVideoToVoice() async {
+    if (model.curCall != null &&
+        model.curCall!.callType == EaseCallType.video) {
       _needSwitchToVoice = true;
       model = model.copyWith(
-        currCall: model.currCall!.copyWith(
+        curCall: model.curCall!.copyWith(
           callType: EaseCallType.audio,
         ),
       );
 
+      viewModel = viewModel?.copyWith(
+        callType: EaseCallType.audio,
+      );
+
       // TODO: 更新ui, 设置声网
     }
-    if (model.currCall?.isCaller == true ||
+    if (model.curCall?.isCaller == true ||
         model.state == EaseCallState.answering) {
       // TODO: 更新ui, 设置声网
     }
+  }
+
+  void enableVideo(bool isEnable) async {
+    if (isEnable) {
+      await _engine.enableVideo();
+    } else {
+      await _engine.disableVideo();
+    }
+  }
+
+  void enableVoice(bool isEnable) async {
+    if (isEnable) {
+      await _engine.enableAudio();
+    } else {
+      await _engine.disableAudio();
+    }
+  }
+
+  void acceptAction() {
+    _sendAnswerMsg(
+      model.curCall!.remoteEid!,
+      model.curCall!.callId!,
+      EaseCallKeys.accept,
+      model.curCall!.remoteDevId!,
+    );
   }
 }

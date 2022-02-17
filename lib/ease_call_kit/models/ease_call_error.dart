@@ -10,6 +10,6 @@ class EaseCallError {
 
 class EaseCallProcessErrorCode {
   static const int invalidParams = 100;
-  static const int currBusy = 101;
+  static const int curBusy = 101;
   static const int fetchTokenFail = 102;
 }

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
-import 'package:ease_call_kit_demo/ease_call_kit/models/ease_call_eccall.dart';
+import 'package:ease_call_kit_demo/ease_call_kit/models/ease_call_ec_call.dart';
 import 'package:ease_call_kit_demo/ease_call_kit/models/ease_call_error.dart';
 import 'package:ease_call_kit_demo/ease_call_kit/models/ease_enums.dart';
 
@@ -13,22 +13,19 @@ String randomString() {
 
 class EaseCallModel {
   bool hasJoinedChannel = false;
-  final String currDevId = randomString();
+  final String curDevId = randomString();
 
-  ECCall? currCall;
+  ECCall? curCall;
   Map<String, ECCall> recvCalls = {};
-  String? currEid;
+  String? curEid;
   String? agoraRtcToken;
   int? agoraUid;
-  bool isMin;
-  bool isMute;
-  bool isSpeaker;
-  int time = 0;
   EaseCallState _state = EaseCallState.idle;
 
   void Function(EaseCallState to, EaseCallState from)? stateChangeHandle;
 
   set state(EaseCallState state) {
+    if (_state == state) return;
     _state = state;
     stateChangeHandle?.call(state, _state);
   }
@@ -36,34 +33,25 @@ class EaseCallModel {
   EaseCallState get state => _state;
 
   EaseCallModel({
-    this.currCall,
-    this.currEid,
+    this.curCall,
+    this.curEid,
     this.agoraRtcToken,
     this.agoraUid,
-    this.isMin = false,
-    this.isSpeaker = false,
-    this.isMute = false,
     this.stateChangeHandle,
   });
 
   EaseCallModel copyWith({
-    ECCall? currCall,
+    ECCall? curCall,
     Map<String, ECCall>? recvCalls,
-    String? currEid,
+    String? curEid,
     String? agoraRtcToken,
     int? agoraUid,
-    bool? isMin,
-    bool? isSpeaker,
-    bool? isMute,
   }) {
     return EaseCallModel(
-      currCall: currCall ?? this.currCall,
-      currEid: currEid ?? this.currEid,
+      curCall: curCall ?? this.curCall,
+      curEid: curEid ?? this.curEid,
       agoraRtcToken: agoraRtcToken ?? this.agoraRtcToken,
       agoraUid: agoraUid ?? this.agoraUid,
-      isMin: isMin ?? this.isMin,
-      isMute: isMute ?? this.isMute,
-      isSpeaker: isSpeaker ?? this.isSpeaker,
     )
       ..state = _state
       ..stateChangeHandle = stateChangeHandle;

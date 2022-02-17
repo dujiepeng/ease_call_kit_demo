@@ -5,9 +5,9 @@ class ECCall {
   String? remoteEid;
   String? remoteDevId;
   EaseCallType? callType;
-  bool? isCaller;
+  late bool isCaller;
   int? uid;
-  Map<int, String>? users;
+  late Map<int, String> users;
   String? channelName;
   String? ext;
 
@@ -16,12 +16,14 @@ class ECCall {
     this.remoteEid,
     this.remoteDevId,
     this.callType,
-    this.isCaller,
+    this.isCaller = false,
     this.uid,
-    this.users,
+    Map<int, String>? users,
     this.channelName,
     this.ext,
-  });
+  }) {
+    this.users = users ?? <int, String>{};
+  }
 
   ECCall copyWith({
     String? callId,

@@ -12,13 +12,13 @@ class EaseCallKeys {
   static const String inviteAction = "invite";
   static const String alertAction = "alert";
   static const String confirmRingAction = "confirmRing";
-  static const String cancalCallAction = "cancelCall";
+  static const String cancelCallAction = "cancelCall";
   static const String answerCallAction = "answerCall";
   static const String confirmCalleeAction = "confirmCallee";
   static const String videoToVoice = "videoToVoice";
   static const String busyResult = "busy";
   static const String accept = "accept";
-  static const String refuseReslut = "refuse";
+  static const String refuseResult = "refuse";
   static const String ext = "ext";
   static const String msgTypeValue = "rtcCallWithAgora";
 }

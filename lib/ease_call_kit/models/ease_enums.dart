@@ -8,7 +8,7 @@ enum EaseCallEndReason {
   busy,
   noResponse,
   remoteNoResponse,
-  handleOnOtherDeivce
+  handleOnOtherDevice
 }
 
 enum EaseCallType { audio, video, multi }

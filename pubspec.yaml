@@ -38,7 +38,8 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
+  
+  sprintf: ^6.0.0
   agora_rtc_engine: ^4.2.0
   permission_handler: ^8.3.0
   im_flutter_sdk:

@@ -1,5 +1,7 @@
+import 'package:ease_call_kit_demo/ease_call_kit/Views/ease_call_time_text.dart';
 import 'package:ease_call_kit_demo/ease_call_kit/ease_call_manager.dart';
 import 'package:ease_call_kit_demo/ease_call_kit/models/ease_enums.dart';
+import 'package:sprintf/sprintf.dart';
 import 'package:flutter/material.dart';
 
 class EaseCallPage extends StatefulWidget {
@@ -40,11 +42,17 @@ class _EaseCallPageState extends State<EaseCallPage>
   bool _isTouchDown = false;
   String get timeStr {
     if (EaseCallManager.instance.model.state == EaseCallState.answering) {
-      int time = EaseCallManager.instance.model.time;
-      String timeStr = (time % 3600).toStringAsFixed(2) +
-          ":" +
-          (time % 60).toStringAsFixed(2);
-
+      int time = EaseCallManager.instance.viewModel!.time;
+      String timeStr = time < 3600
+          ? sprintf("%02i:%02i", [
+              int.parse(((time % 3600) / 60).truncate().toStringAsFixed(0)),
+              (time % 60),
+            ])
+          : sprintf("%02i:%02i:%02i", [
+              int.parse((time / 3600).truncate().toStringAsFixed(0)),
+              int.parse(((time % 3600) / 60).truncate().toStringAsFixed(0)),
+              (time % 60)
+            ]);
       return timeStr;
     } else {
       return "接通中";
@@ -53,7 +61,7 @@ class _EaseCallPageState extends State<EaseCallPage>
 
   @override
   void initState() {
-    EaseCallManager.instance.appId = widget.appId;
+    EaseCallManager.instance.setAppId(widget.appId);
     EaseCallManager.instance.addListener(() {
       _updateOverlayEntry();
     });
@@ -70,14 +78,15 @@ class _EaseCallPageState extends State<EaseCallPage>
   void _updateOverlayEntry() {
     _overlayEntry?.remove();
     _overlayEntry = null;
-    if (EaseCallManager.instance.model.state == EaseCallState.idle) {
-      return;
-    }
+
+    /// 不存在viewMode，则表示不需要显示。
+    if (EaseCallManager.instance.viewModel == null) return;
+
     _overlayEntry = OverlayEntry(
       builder: (context) {
         late Widget callWidget;
-        bool isMin = EaseCallManager.instance.model.isMin;
-        switch (EaseCallManager.instance.model.currCall!.callType!) {
+        bool isMin = EaseCallManager.instance.viewModel!.isMin;
+        switch (EaseCallManager.instance.viewModel!.callType) {
           case EaseCallType.audio:
             callWidget = isMin ? _voiceMinView() : _voiceNormalView();
             break;
@@ -85,7 +94,7 @@ class _EaseCallPageState extends State<EaseCallPage>
             callWidget = isMin ? _videoMinView() : _videoNormalView();
             break;
           case EaseCallType.multi:
-            callWidget = isMin ? _mutiNormalView() : _mutiMinView();
+            callWidget = isMin ? _multiNormalView() : _multiMinView();
             break;
         }
         return SafeArea(
@@ -108,6 +117,18 @@ class _EaseCallPageState extends State<EaseCallPage>
   }
 
   Widget _voiceNormalView() {
+    GlobalKey<EaseCallTimeTextState> textKey = GlobalKey();
+    EaseCallManager.instance.viewModel?.addListener(() {
+      textKey.currentState?.strUpdate(timeStr);
+    });
+    EaseCallTimeText timeText = EaseCallTimeText(
+      timeStr,
+      const TextStyle(
+        fontSize: 24,
+        height: 1.1,
+      ),
+      key: textKey,
+    );
     return Positioned(
       left: 0,
       top: 0,
@@ -125,8 +146,9 @@ class _EaseCallPageState extends State<EaseCallPage>
                 IconButton(
                     padding: const EdgeInsets.all(20),
                     iconSize: 36,
-                    onPressed: () =>
-                        {EaseCallManager.instance.setWindowToMin(true)},
+                    onPressed: () => {
+                          EaseCallManager.instance.setWindowToMin(true),
+                        },
                     icon: const Icon(
                       Icons.class__outlined,
                     ))
@@ -140,135 +162,72 @@ class _EaseCallPageState extends State<EaseCallPage>
             const SizedBox(
               height: 20,
             ),
-            Text(
-              timeStr,
-              style: const TextStyle(
-                fontSize: 24,
-                height: 1.1,
-              ),
-            ),
+            timeText,
             Expanded(
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: () {
                   List<Widget> widgets = [];
-                  if (EaseCallManager.instance.model.state ==
-                      EaseCallState.outgoing) {
+                  if (EaseCallManager.instance.viewModel!.isCallIn == false ||
+                      EaseCallManager.instance.viewModel?.state ==
+                          EaseCallState.answering) {
                     widgets.add(
-                      TextButton(
-                        style: ButtonStyle(
-                          padding: MaterialStateProperty.all(
-                              const EdgeInsets.all(16)),
-                          shape: MaterialStateProperty.all(
-                            RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(60),
-                            ),
-                          ),
-                          backgroundColor:
-                              MaterialStateProperty.all(Colors.black38),
-                        ),
-                        onPressed: () => EaseCallManager.instance
-                            .setMute(!EaseCallManager.instance.model.isMute),
-                        child: Icon(
-                          EaseCallManager.instance.model.isMute
-                              ? Icons.mic_off
-                              : Icons.mic,
-                          size: 50,
-                          color: Colors.white,
-                        ),
+                      _getCallBtn(
+                        EaseCallManager.instance.viewModel!.isMute
+                            ? Icons.mic_off
+                            : Icons.mic,
+                        Colors.black38,
+                        Colors.white,
+                        clickAction: () {
+                          EaseCallManager.instance.setMute(
+                            !EaseCallManager.instance.viewModel!.isMute,
+                          );
+                        },
                       ),
                     );
                     widgets.add(
-                      TextButton(
-                        style: ButtonStyle(
-                          padding: MaterialStateProperty.all(
-                              const EdgeInsets.all(16)),
-                          shape: MaterialStateProperty.all(
-                            RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(60),
-                            ),
-                          ),
-                          backgroundColor:
-                              MaterialStateProperty.all(Colors.red),
-                        ),
-                        onPressed: () {
+                      _getCallBtn(
+                        Icons.call_end,
+                        Colors.red,
+                        Colors.white,
+                        clickAction: () {
                           EaseCallManager.instance.hangupAction();
                         },
-                        child: const Icon(
-                          Icons.call_end,
-                          size: 50,
-                          color: Colors.white,
-                        ),
                       ),
                     );
                     widgets.add(
-                      TextButton(
-                        style: ButtonStyle(
-                          padding: MaterialStateProperty.all(
-                              const EdgeInsets.all(16)),
-                          shape: MaterialStateProperty.all(
-                            RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(60),
-                            ),
-                          ),
-                          backgroundColor:
-                              MaterialStateProperty.all(Colors.black38),
-                        ),
-                        onPressed: () => EaseCallManager.instance.setSpeakerOut(
-                            !EaseCallManager.instance.model.isSpeaker),
-                        child: Icon(
-                          EaseCallManager.instance.model.isSpeaker
-                              ? Icons.hearing
-                              : Icons.volume_up,
-                          size: 50,
-                          color: Colors.white,
-                        ),
+                      _getCallBtn(
+                        EaseCallManager.instance.viewModel!.isSpeaker
+                            ? Icons.hearing
+                            : Icons.volume_up,
+                        Colors.black38,
+                        Colors.white,
+                        clickAction: () {
+                          EaseCallManager.instance.setSpeakerOut(
+                            !EaseCallManager.instance.viewModel!.isSpeaker,
+                          );
+                        },
                       ),
                     );
                   } else {
                     widgets.add(
-                      TextButton(
-                        style: ButtonStyle(
-                          padding: MaterialStateProperty.all(
-                              const EdgeInsets.all(16)),
-                          shape: MaterialStateProperty.all(
-                            RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(60),
-                            ),
-                          ),
-                          backgroundColor:
-                              MaterialStateProperty.all(Colors.red),
-                        ),
-                        onPressed: () {
-                          EaseCallManager.instance.hangupAction();
+                      _getCallBtn(
+                        Icons.call_end,
+                        Colors.red,
+                        Colors.white,
+                        clickAction: () => {
+                          EaseCallManager.instance.hangupAction(),
                         },
-                        child: const Icon(
-                          Icons.call_end,
-                          size: 50,
-                          color: Colors.white,
-                        ),
                       ),
                     );
 
                     widgets.add(
-                      TextButton(
-                        style: ButtonStyle(
-                          padding: MaterialStateProperty.all(
-                              const EdgeInsets.all(16)),
-                          shape: MaterialStateProperty.all(
-                            RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(60),
-                            ),
-                          ),
-                          backgroundColor:
-                              MaterialStateProperty.all(Colors.green),
-                        ),
-                        onPressed: () {},
-                        child: const Icon(
-                          Icons.call,
-                          size: 50,
-                          color: Colors.white,
-                        ),
+                      _getCallBtn(
+                        Icons.call,
+                        Colors.green,
+                        Colors.white,
+                        clickAction: () =>
+                            EaseCallManager.instance.acceptAction(),
                       ),
                     );
                   }
@@ -283,7 +242,7 @@ class _EaseCallPageState extends State<EaseCallPage>
     );
   }
 
-  Widget _mutiNormalView() {
+  Widget _multiNormalView() {
     return Container();
   }
 
@@ -300,6 +259,20 @@ class _EaseCallPageState extends State<EaseCallPage>
         ? widget.voiceMinFrame.right
         : _animation?.value.dx ?? widget.voiceMinFrame.right;
 
+    GlobalKey<EaseCallTimeTextState> textKey = GlobalKey();
+    EaseCallManager.instance.viewModel?.addListener(() {
+      textKey.currentState?.strUpdate(timeStr);
+    });
+
+    EaseCallTimeText timeText = EaseCallTimeText(
+      timeStr,
+      const TextStyle(
+        color: Colors.white,
+        fontSize: 18,
+        height: 1.1,
+      ),
+      key: textKey,
+    );
     return Positioned(
       top: top,
       right: right,
@@ -307,102 +280,121 @@ class _EaseCallPageState extends State<EaseCallPage>
         width: widget.voiceMinFrame.width,
         height: widget.voiceMinFrame.height,
         child: GestureDetector(
-            onPanUpdate: (details) => {
-                  widget.voiceMinFrame.right -= details.delta.dx,
-                  widget.voiceMinFrame.top += details.delta.dy,
-                  _overlayEntry?.markNeedsBuild(),
-                },
-            onTapDown: (details) => {
-                  _isTouchDown = true,
-                },
-            onTapUp: (details) => {
-                  _isTouchDown = false,
-                },
-            onPanEnd: (details) async {
-              _isTouchDown = false;
-              double y = widget.voiceMinFrame.top;
-              double x = widget.voiceMinFrame.right;
-              if (y < widget.minWindowZone.top) {
-                y = widget.minWindowZone.top;
-              }
-              if (y >
-                  _windowSize!.height -
-                      widget.minWindowZone.bottom -
-                      widget.voiceMinFrame.height) {
-                y = _windowSize!.height -
+          onPanUpdate: (details) => {
+            widget.voiceMinFrame.right -= details.delta.dx,
+            widget.voiceMinFrame.top += details.delta.dy,
+            _overlayEntry?.markNeedsBuild(),
+          },
+          onTapDown: (details) => {
+            _isTouchDown = true,
+          },
+          onTapUp: (details) => {
+            _isTouchDown = false,
+          },
+          onPanEnd: (details) async {
+            _isTouchDown = false;
+            double y = widget.voiceMinFrame.top;
+            double x = widget.voiceMinFrame.right;
+            if (y < widget.minWindowZone.top) {
+              y = widget.minWindowZone.top;
+            }
+            if (y >
+                _windowSize!.height -
                     widget.minWindowZone.bottom -
-                    widget.voiceMinFrame.height;
-              }
-              if ((_windowSize!.width - x - widget.voiceMinFrame.width / 2) >
-                  _windowSize!.width / 2) {
-                x = widget.minWindowZone.right;
-              } else {
-                x = _windowSize!.width -
-                    widget.minWindowZone.left -
-                    widget.voiceMinFrame.width;
-              }
-
-              _animController = AnimationController(
-                duration: const Duration(milliseconds: 100),
-                vsync: this,
-              );
-              _animation = Tween(
-                begin: Offset(
-                    widget.voiceMinFrame.right, widget.voiceMinFrame.top),
-                end: Offset(x, y),
-              ).animate(_animController!)
-                ..addListener(() {
-                  _overlayEntry?.markNeedsBuild();
-                })
-                ..addStatusListener((status) {
-                  if (status == AnimationStatus.completed) {
-                    widget.voiceMinFrame.right = x;
-                    widget.voiceMinFrame.top = y;
-                  }
-                });
-              await _animController!.forward();
-              _animController!.dispose();
-            },
-            child: TextButton(
-              style: ButtonStyle(
-                padding: MaterialStateProperty.all(const EdgeInsets.all(6)),
-                shape: MaterialStateProperty.all(
-                  RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
+                    widget.voiceMinFrame.height) {
+              y = _windowSize!.height -
+                  widget.minWindowZone.bottom -
+                  widget.voiceMinFrame.height;
+            }
+            if ((_windowSize!.width - x - widget.voiceMinFrame.width / 2) >
+                _windowSize!.width / 2) {
+              x = widget.minWindowZone.right;
+            } else {
+              x = _windowSize!.width -
+                  widget.minWindowZone.left -
+                  widget.voiceMinFrame.width;
+            }
+            _animController = AnimationController(
+              duration: const Duration(milliseconds: 100),
+              vsync: this,
+            );
+            _animation = Tween(
+              begin:
+                  Offset(widget.voiceMinFrame.right, widget.voiceMinFrame.top),
+              end: Offset(x, y),
+            ).animate(_animController!)
+              ..addListener(() {
+                _overlayEntry?.markNeedsBuild();
+              })
+              ..addStatusListener((status) {
+                if (status == AnimationStatus.completed) {
+                  widget.voiceMinFrame.right = x;
+                  widget.voiceMinFrame.top = y;
+                }
+              });
+            await _animController!.forward();
+            _animController!.dispose();
+          },
+          child: TextButton(
+            style: ButtonStyle(
+              padding: MaterialStateProperty.all(const EdgeInsets.all(6)),
+              shape: MaterialStateProperty.all(
+                RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                backgroundColor: MaterialStateProperty.all(Colors.green),
               ),
-              child: Column(
-                children: [
-                  const SizedBox(
-                    height: 16,
-                  ),
-                  const Icon(
-                    Icons.call,
-                    size: 40,
-                    color: Colors.white,
-                  ),
-                  const SizedBox(
-                    height: 10,
-                  ),
-                  Text(
-                    timeStr, // 00:00
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      height: 1.1,
-                    ),
-                  )
-                ],
-              ),
-              onPressed: () => {EaseCallManager.instance.setWindowToMin(false)},
-            )),
+              backgroundColor: MaterialStateProperty.all(Colors.green),
+            ),
+            child: Column(
+              children: [
+                const SizedBox(
+                  height: 16,
+                ),
+                const Icon(
+                  Icons.call,
+                  size: 40,
+                  color: Colors.white,
+                ),
+                const SizedBox(
+                  height: 10,
+                ),
+                timeText,
+              ],
+            ),
+            onPressed: () => {EaseCallManager.instance.setWindowToMin(false)},
+          ),
+        ),
       ),
     );
   }
 
-  Widget _mutiMinView() {
+  Widget _getCallBtn(
+    IconData btnIcon,
+    Color bgColor,
+    Color forceColor, {
+    double size = 50,
+    VoidCallback? clickAction,
+  }) {
+    return TextButton(
+      style: ButtonStyle(
+        padding: MaterialStateProperty.all(const EdgeInsets.all(16)),
+        shape: MaterialStateProperty.all(
+          RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(60),
+          ),
+        ),
+        backgroundColor: MaterialStateProperty.all(bgColor),
+      ),
+      onPressed: clickAction,
+      child: Icon(
+        btnIcon,
+        size: size,
+        color: forceColor,
+      ),
+    );
+  }
+
+  Widget _multiMinView() {
     return Container();
   }
 
