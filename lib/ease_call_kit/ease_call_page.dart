@@ -1,6 +1,7 @@
 import 'package:ease_call_kit_demo/ease_call_kit/Views/ease_call_time_text.dart';
 import 'package:ease_call_kit_demo/ease_call_kit/ease_call_manager.dart';
 import 'package:ease_call_kit_demo/ease_call_kit/models/ease_enums.dart';
+import 'package:agora_rtc_engine/rtc_remote_view.dart';
 import 'package:sprintf/sprintf.dart';
 import 'package:flutter/material.dart';
 
@@ -42,7 +43,7 @@ class _EaseCallPageState extends State<EaseCallPage>
   bool _isTouchDown = false;
   String get timeStr {
     if (EaseCallManager.instance.model.state == EaseCallState.answering) {
-      int time = EaseCallManager.instance.viewModel!.time;
+      int time = EaseCallManager.instance.viewModel!.time ?? 0;
       String timeStr = time < 3600
           ? sprintf("%02i:%02i", [
               int.parse(((time % 3600) / 60).truncate().toStringAsFixed(0)),
@@ -113,7 +114,7 @@ class _EaseCallPageState extends State<EaseCallPage>
   }
 
   Widget _videoNormalView() {
-    return Container();
+    return SurfaceView(uid: EaseCallManager.instance.model.curCall!.uid!);
   }
 
   Widget _voiceNormalView() {

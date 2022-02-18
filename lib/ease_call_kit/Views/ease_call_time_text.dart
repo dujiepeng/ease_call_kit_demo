@@ -10,10 +10,10 @@ class EaseCallTimeText extends StatefulWidget {
   final TextStyle textStyle;
   final String curStr;
   @override
-  _EaseCallTimeTextState createState() => _EaseCallTimeTextState();
+  EaseCallTimeTextState createState() => EaseCallTimeTextState();
 }
 
-class _EaseCallTimeTextState extends State<EaseCallTimeText> {
+class EaseCallTimeTextState extends State<EaseCallTimeText> {
   String? timeStr;
   @override
   Widget build(BuildContext context) {

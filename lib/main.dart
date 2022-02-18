@@ -8,6 +8,8 @@ import 'package:ease_call_kit_demo/ease_call_kit/models/ease_call_error.dart';
 import 'package:flutter/material.dart';
 import 'package:im_flutter_sdk/im_flutter_sdk.dart';
 
+import 'ease_call_kit/models/ease_call_event_handle.dart';
+
 String defineAppKey = "1110200629107815#flutter";
 String defineAgoraId = "15cb0d28b87b425ea613fc46f7c9f974";
 
@@ -70,11 +72,35 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     _initSDK();
-    EaseCallManager.instance.setHandle(EaseCallEventHandle(
-      callDidRequestTokenForAppId: (appId, channelName, eid, agoraUId) => {
-        fetchRTCToken(channelName, EMClient.getInstance.currentUsername!),
-      },
-    ));
+    EaseCallManager.instance.setHandle(
+      EaseCallEventHandle(
+        startTalking: (channelName, remoteEid) => {
+          debugPrint("---通话接通: $channelName, $remoteEid"),
+        },
+        callDidRequestTokenForAppId: (appId, channelName, eid, agoraUId) {
+          debugPrint("---收到需要获取token回调");
+          fetchRTCToken(channelName, EMClient.getInstance.currentUsername!);
+        },
+        callDidEnd: (channel, reason, time, type, remoteEid) {
+          debugPrint("---通话结束: $channel, $reason, $time, $type, $remoteEid");
+        },
+        callDidOccurError: (remoteId, error) => {
+          debugPrint("---通话报错 $remoteId, $error"),
+        },
+        callDidReceive: (type, inviter, ext) => {
+          debugPrint("---收到呼叫 $type, $inviter, $ext"),
+        },
+        multiCallDidInviting: (users) => {
+          debugPrint("---收到多人通话邀请 $users"),
+        },
+        remoteUserDidJoinChannel: (channelName, agoraUId, eid) => {
+          debugPrint("---有人加入会议 $channelName, $agoraUId, $eid"),
+        },
+        didJoinChannel: (channelName, agoraUid) => {
+          debugPrint("---自己加入channel: $channelName, $agoraUid"),
+        },
+      ),
+    );
     super.initState();
   }
 

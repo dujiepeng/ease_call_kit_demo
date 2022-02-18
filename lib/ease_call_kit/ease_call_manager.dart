@@ -13,6 +13,8 @@ import 'package:flutter/widgets.dart';
 
 import 'package:im_flutter_sdk/im_flutter_sdk.dart';
 
+import 'models/ease_call_event_handle.dart';
+
 String currentTime = DateTime.now().millisecondsSinceEpoch.toString();
 
 class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
@@ -203,7 +205,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
     try {
       await CallMessage(msg).send();
     } on EaseCallError catch (e) {
-      callEventHandle?.callDidOccurError?.call(e);
+      _callbackWithError(e);
     }
   }
 
@@ -232,7 +234,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
     try {
       await CallMessage(msg).send();
     } on EaseCallError catch (e) {
-      callEventHandle?.callDidOccurError?.call(e);
+      _callbackWithError(e);
     }
   }
 
@@ -255,7 +257,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
     try {
       await CallMessage(msg).send();
     } on EaseCallError catch (e) {
-      callEventHandle?.callDidOccurError?.call(e);
+      _callbackWithError(e);
     }
   }
 
@@ -291,7 +293,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
       await CallMessage(msg).send();
       _startConfirmTimer(callId);
     } on EaseCallError catch (e) {
-      callEventHandle?.callDidOccurError?.call(e);
+      _callbackWithError(e);
     }
   }
 
@@ -325,7 +327,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
       await CallMessage(msg).send();
     } on EaseCallError catch (e) {
       model.state = EaseCallState.idle;
-      callEventHandle?.callDidOccurError?.call(e);
+      _callbackWithError(e);
     }
   }
 
@@ -347,7 +349,7 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
     try {
       await CallMessage(msg).send();
     } on EaseCallError catch (e) {
-      callEventHandle?.callDidOccurError?.call(e);
+      _callbackWithError(e);
     }
   }
 
@@ -701,26 +703,40 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
     callEventHandle?.callDidEnd?.call(
       model.curCall?.channelName,
       reason,
-      0,
+      viewModel?.time,
       model.curCall?.callType,
+      model.curCall?.remoteEid,
     );
   }
 
   void _callbackError(EaseCallErrorType type, int code, String desc) {
-    callEventHandle?.callDidOccurError?.call(EaseCallError(code, type, desc));
+    callEventHandle?.callDidOccurError?.call(
+      model.curCall?.remoteEid,
+      EaseCallError(code, type, desc),
+    );
+  }
+
+  void _callbackWithError(EaseCallError error) {
+    callEventHandle?.callDidOccurError?.call(
+      model.curCall?.remoteEid,
+      error,
+    );
   }
 
   /// 开始计时
   void _startCallTimeRunner() {
     _stopCallTimeRunner();
     _callTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      viewModel?.time += 1;
+      if (viewModel != null) {
+        viewModel!.time ??= 0;
+        viewModel!.time = viewModel!.time! + 1;
+      }
     });
   }
 
   void _stopCallTimeRunner() {
     _callTimer?.cancel();
-    viewModel?.time = 0;
+    viewModel?.time = null;
   }
 
   /// pragma mark - update ui.
@@ -761,11 +777,18 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
 
   void _refreshAnswering() {
     if (model.curCall != null) {
+      String? remoteId = null;
       if (model.curCall!.callType == EaseCallType.multi &&
           model.curCall!.isCaller) {
         // TODO: update local video view;
         _needFetchToken();
+      } else {
+        remoteId = model.curCall?.remoteEid;
       }
+      callEventHandle?.startTalking?.call(
+        model.curCall?.channelName,
+        remoteId,
+      );
       _startCallTimeRunner();
       viewModel = viewModel?.copyWith(state: model.state);
       _updateUI();
@@ -828,83 +851,6 @@ class EaseCallManager with ChangeNotifier implements EMChatManagerListener {
       _parseMsg(msg);
     }
   }
-}
-
-class EaseCallEventHandle {
-  /// 通话结束
-  /// [channel] 通话channel
-  /// [reason] 结束原因
-  /// [time] 通话持续时间
-  /// [type] 通话类型
-  final void Function(
-    String? channel,
-    EaseCallEndReason reason,
-    int time,
-    EaseCallType? type,
-  )? callDidEnd;
-
-  /// 多人通话时点击邀请
-  /// [users] 当前已在通话中获已被邀请的成员
-  final void Function(
-    List<String?> users,
-  )? multiCAllDidInviting;
-
-  /// 收到通话邀请
-  /// [type] 通话类型
-  /// [inviter] 邀请人环信id
-  /// [ext] 邀请时附带信息
-  final void Function(
-    EaseCallType type,
-    String inviter,
-    String? ext,
-  )? callDidReceive;
-
-  /// 通话过程中发送异常回调
-  /// [error] 错误信息
-  final void Function(
-    EaseCallError error,
-  )? callDidOccurError;
-
-  /// 加入通话前会触发该回调，需要获取声网token并通过EaseCallManager#setAgoraToken设置给EaseCallKit
-  /// [appId] 当前的AppId
-  /// [channelName] 当前的channelName
-  /// [eid] 当前使用的环信id
-  /// [agoraUid] 当前的声网id，如果没有，需要由AppServer分配
-  final void Function(
-    String appId,
-    String channelName,
-    String eid,
-    int? agoraUId,
-  )? callDidRequestTokenForAppId;
-
-  /// 有用户加入会议
-  /// [channelName] channelName
-  /// [agoraUId] 加入人的声网id
-  /// [eid] 加入人的环信id
-  final void Function(
-    String channelName,
-    int agoraUId,
-    String eid,
-  )? remoteUserDidJoinChannel;
-
-  /// 自己加入会议后回调
-  /// [channelName] channel name;
-  /// [agoraUid] 声网id
-
-  final void Function(
-    String channelName,
-    int agoraUid,
-  )? didJoinChannel;
-
-  EaseCallEventHandle({
-    this.callDidEnd,
-    this.multiCAllDidInviting,
-    this.callDidReceive,
-    this.callDidOccurError,
-    this.callDidRequestTokenForAppId,
-    this.remoteUserDidJoinChannel,
-    this.didJoinChannel,
-  });
 }
 
 extension EaseCallManagerMethod on EaseCallManager {
@@ -991,6 +937,7 @@ extension EaseCallManagerMethod on EaseCallManager {
           EaseCallKeys.refuseResult,
           model.curCall!.remoteDevId!,
         );
+        _callbackCallEnd(EaseCallEndReason.refuse);
         model.state = EaseCallState.idle;
       }
     }

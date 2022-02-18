@@ -21,9 +21,9 @@ class EaseCallViewModel with ChangeNotifier {
   final EaseCallState state;
 
   /// 通话时长
-  int _time = 0;
+  int? _time;
 
-  int get time => _time;
+  int? get time => _time;
 
   set time(value) {
     _time = value;
