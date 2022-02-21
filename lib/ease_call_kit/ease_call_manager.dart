@@ -969,14 +969,8 @@ extension EaseCallManagerMethod on EaseCallManager {
   /// 设置麦克风静音
   /// [isMute] 是否静音
   void setMute(bool isMute) async {
-    if (isMute) {
-      await _engine.disableAudio();
-    } else {
-      await _engine.enableAudio();
-    }
-
+    await _engine.muteLocalAudioStream(isMute);
     viewModel = viewModel?.copyWith(isMute: isMute);
-
     _updateUI();
   }
 
